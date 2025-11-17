@@ -46,17 +46,21 @@ import net.minecraft.util.MovingObjectPosition;
 import net.minecraft.util.Vec3;
 import net.minecraftforge.client.ForgeHooksClient;
 
-import org.joml.Vector3f;
-import org.joml.Vector4i;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.util.glu.GLU;
+import org.lwjgl.util.vector.Vector3f;
 
 import com.gtnewhorizon.gtnhlib.util.CoordinatePacker;
 
+import bartworks.common.blocks.BWBlocksGlass;
+import blockrenderer6343.BlockRenderer6343;
+import blockrenderer6343.api.utils.Position;
+import blockrenderer6343.api.utils.PositionedRect;
+import blockrenderer6343.api.utils.Size;
 import blockrenderer6343.client.utils.ProjectionUtils;
 import blockrenderer6343.client.world.TrackedDummyWorld;
-import it.unimi.dsi.fastutil.longs.LongArrayList;
-import it.unimi.dsi.fastutil.longs.LongCollection;
+import codechicken.lib.vec.Vector3;
+import gregtech.common.render.GTRendererBlock;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 
@@ -69,23 +73,19 @@ import it.unimi.dsi.fastutil.longs.LongSet;
  */
 public abstract class WorldSceneRenderer {
 
-    public static int backgroundColor = 0xC6C6C6;
     // you have to place blocks in the world before use
     public final TrackedDummyWorld world;
     // the Blocks which this renderer needs to render
     public final LongSet renderedBlocks = new LongOpenHashSet();
-    public final LongArrayList renderTranslucentBlocks = new LongArrayList();
     private Consumer<WorldSceneRenderer> beforeRender;
     private Consumer<WorldSceneRenderer> onRender;
     private Consumer<MovingObjectPosition> onLookingAt;
-    private Consumer<WorldSceneRenderer> onPostBlockRendered;
+    private int clearColor;
     private MovingObjectPosition lastTraceResult;
-    private final Vector3f eyePos = new Vector3f(0, 0, -10f);
-    private final Vector3f lookAt = new Vector3f(0, 0, 0);
-    private final Vector3f worldUp = new Vector3f(0, 1, 0);
-    protected Vector4i rect = new Vector4i();
+    private Vector3f eyePos = new Vector3f(0, 0, -10f);
+    private Vector3f lookAt = new Vector3f(0, 0, 0);
+    private Vector3f worldUp = new Vector3f(0, 1, 0);
     private boolean renderAllFaces = false;
-    private final RenderBlocks bufferBuilder = new RenderBlocks();
 
     public WorldSceneRenderer(TrackedDummyWorld world) {
         this.world = world;
@@ -96,35 +96,16 @@ public abstract class WorldSceneRenderer {
         return this;
     }
 
-    public WorldSceneRenderer setPostBlockRender(Consumer<WorldSceneRenderer> callback) {
-        this.onPostBlockRendered = callback;
-        return this;
-    }
-
     public WorldSceneRenderer setOnWorldRender(Consumer<WorldSceneRenderer> callback) {
         this.onRender = callback;
         return this;
     }
 
-    public void setRenderAllBlocks() {
-        resetRenderedBlocks();
-        setRenderAllFaces(false);
-        this.renderedBlocks.addAll(world.blockMap.keySet());
-        world.setVisibleYLevel(-1);
-    }
-
-    public void setRenderYLayer(int layer) {
-        resetRenderedBlocks();
-        setRenderAllFaces(true);
-
-        int minY = (int) world.getMinPos().y();
-        world.setVisibleYLevel(minY + layer);
-
-        for (long pos : world.blockMap.keySet()) {
-            if (CoordinatePacker.unpackY(pos) - minY == layer) {
-                this.renderedBlocks.add(pos);
-            }
+    public WorldSceneRenderer addRenderedBlocks(LongSet blocks) {
+        if (blocks != null) {
+            this.renderedBlocks.addAll(blocks);
         }
+        return this;
     }
 
     public WorldSceneRenderer setOnLookingAt(Consumer<MovingObjectPosition> onLookingAt) {
@@ -136,13 +117,12 @@ public abstract class WorldSceneRenderer {
         this.renderAllFaces = renderAllFaces;
     }
 
-    public MovingObjectPosition getLastTraceResult() {
-        return lastTraceResult;
+    public void setClearColor(int clearColor) {
+        this.clearColor = clearColor;
     }
 
-    public void resetRenderedBlocks() {
-        renderedBlocks.clear();
-        renderTranslucentBlocks.clear();
+    public MovingObjectPosition getLastTraceResult() {
+        return lastTraceResult;
     }
 
     /**
@@ -151,17 +131,23 @@ public abstract class WorldSceneRenderer {
      * gui coordinates. It will return matrices of projection and view in previous state after rendering
      */
     public void render(int x, int y, int width, int height, int mouseX, int mouseY) {
-        rect.set(x, y, width, height);
+        PositionedRect positionedRect = getPositionedRect(x, y, width, height);
+        PositionedRect mouse = getPositionedRect(mouseX, mouseY, 0, 0);
+        mouseX = mouse.position.x;
+        mouseY = mouse.position.y;
         // setupCamera
-        setupCamera();
+        setupCamera(positionedRect);
 
         // render TrackedDummyWorld
         drawWorld();
 
         // check lookingAt
         this.lastTraceResult = null;
-        if (onLookingAt != null && isInsideRect(mouseX, mouseY)) {
-            Vector3f lookVec = ProjectionUtils.unProject(rect, eyePos, lookAt, mouseX, mouseY);
+        if (onLookingAt != null && mouseX > positionedRect.position.x
+                && mouseX < positionedRect.position.x + positionedRect.size.width
+                && mouseY > positionedRect.position.y
+                && mouseY < positionedRect.position.y + positionedRect.size.height) {
+            Vector3f lookVec = ProjectionUtils.unProject(positionedRect, eyePos, lookAt, mouseX, mouseY);
             MovingObjectPosition result = rayTrace(lookVec);
             if (result != null) {
                 this.lastTraceResult = result;
@@ -169,6 +155,7 @@ public abstract class WorldSceneRenderer {
             }
         }
 
+        // resetcamera
         resetCamera();
     }
 
@@ -185,23 +172,28 @@ public abstract class WorldSceneRenderer {
     }
 
     public void setCameraLookAt(Vector3f eyePos, Vector3f lookAt, Vector3f worldUp) {
-        this.eyePos.set(eyePos);
-        this.lookAt.set(lookAt);
-        this.worldUp.set(worldUp);
+        this.eyePos = eyePos;
+        this.lookAt = lookAt;
+        this.worldUp = worldUp;
     }
 
     public void setCameraLookAt(Vector3f lookAt, double radius, double rotationPitch, double rotationYaw) {
-        this.lookAt.set(lookAt);
-        eyePos.set((float) Math.cos(rotationPitch), 0, (float) Math.sin(rotationPitch))
-                .add(0, (float) (Math.tan(rotationYaw) * eyePos.length()), 0).normalize().mul((float) radius)
-                .add(lookAt);
+        this.lookAt = lookAt;
+        Vector3 vecX = new Vector3(Math.cos(rotationPitch), 0, Math.sin(rotationPitch));
+        Vector3 vecY = new Vector3(0, Math.tan(rotationYaw) * vecX.mag(), 0);
+        Vector3 pos = vecX.copy().add(vecY).normalize().multiply(radius);
+        this.eyePos = pos.add(lookAt.x, lookAt.y, lookAt.z).vector3f();
     }
 
-    public void setupCamera() {
-        int x = rect.x;
-        int y = rect.y;
-        int width = rect.z;
-        int height = rect.w;
+    protected PositionedRect getPositionedRect(int x, int y, int width, int height) {
+        return new PositionedRect(new Position(x, y), new Size(width, height));
+    }
+
+    public void setupCamera(PositionedRect positionedRect) {
+        int x = positionedRect.getPosition().x;
+        int y = positionedRect.getPosition().y;
+        int width = positionedRect.getSize().width;
+        int height = positionedRect.getSize().height;
 
         Minecraft mc = Minecraft.getMinecraft();
         glPushAttrib(GL_ALL_ATTRIB_BITS);
@@ -239,7 +231,7 @@ public abstract class WorldSceneRenderer {
     }
 
     protected void clearView(int x, int y, int width, int height) {
-        setGlClearColorFromInt(backgroundColor, backgroundColor >> 24);
+        setGlClearColorFromInt(clearColor, clearColor >> 24);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
 
@@ -263,18 +255,6 @@ public abstract class WorldSceneRenderer {
         glPopAttrib();
     }
 
-    private double getDistanceSq(long coord) {
-        int x = CoordinatePacker.unpackX(coord);
-        int y = CoordinatePacker.unpackY(coord);
-        int z = CoordinatePacker.unpackZ(coord);
-
-        double xd = eyePos.x - x;
-        double yd = eyePos.y - y;
-        double zd = eyePos.z - z;
-
-        return xd * xd + yd * yd + zd * zd;
-    }
-
     protected void drawWorld() {
         if (beforeRender != null) {
             beforeRender.accept(this);
@@ -290,16 +270,49 @@ public abstract class WorldSceneRenderer {
         glEnable(GL_TEXTURE_2D);
         glEnable(GL_ALPHA_TEST);
 
-        if (!renderTranslucentBlocks.isEmpty()) {
-            renderTranslucentBlocks.sort((a, b) -> -Double.compare(getDistanceSq(a), getDistanceSq(b)));
-        }
-
+        final int savedAo = mc.gameSettings.ambientOcclusion;
+        mc.gameSettings.ambientOcclusion = 0;
         Tessellator tessellator = Tessellator.instance;
-        renderBlocks(tessellator, renderedBlocks, false);
-        renderBlocks(tessellator, renderTranslucentBlocks, true);
+        tessellator.startDrawingQuads();
+        try {
+            tessellator.setBrightness(15 << 20 | 15 << 4);
+            for (long pos : renderedBlocks) {
+                int x = CoordinatePacker.unpackX(pos);
+                int y = CoordinatePacker.unpackY(pos);
+                int z = CoordinatePacker.unpackZ(pos);
+                Block block = world.getBlock(x, y, z);
+                if (block.equals(Blocks.air)) continue;
 
-        if (onPostBlockRendered != null) {
-            onPostBlockRendered.accept(this);
+                RenderBlocks bufferBuilder = new RenderBlocks();
+                bufferBuilder.blockAccess = world;
+                bufferBuilder.setRenderBounds(0, 0, 0, 1, 1, 1);
+                bufferBuilder.renderAllFaces = renderAllFaces;
+                if (BlockRenderer6343.isBartworksLoaded && block instanceof BWBlocksGlass bwGlass) {
+                    // this mod cannot render renderpass = 1 blocks for now
+                    bufferBuilder.renderStandardBlockWithColorMultiplier(
+                            block,
+                            x,
+                            y,
+                            z,
+                            bwGlass.getColor(world.getBlockMetadata(x, y, z))[0] / 255f,
+                            bwGlass.getColor(world.getBlockMetadata(x, y, z))[1] / 255f,
+                            bwGlass.getColor(world.getBlockMetadata(x, y, z))[2] / 255f);
+                } else if (BlockRenderer6343.isGTLoaded) {
+                    if (!GTRendererBlock.INSTANCE
+                            .renderWorldBlock(world, x, y, z, block, block.getRenderType(), bufferBuilder)) {
+                        bufferBuilder.renderBlockByRenderType(block, x, y, z);
+                    }
+                } else {
+                    bufferBuilder.renderBlockByRenderType(block, x, y, z);
+                }
+            }
+            if (onRender != null) {
+                onRender.accept(this);
+            }
+        } finally {
+            mc.gameSettings.ambientOcclusion = savedAo;
+            tessellator.draw();
+            tessellator.setTranslation(0, 0, 0);
         }
 
         RenderHelper.enableStandardItemLighting();
@@ -329,42 +342,6 @@ public abstract class WorldSceneRenderer {
         glDepthMask(true);
     }
 
-    public void renderBlocks(Tessellator tessellator, LongCollection blocksToRender, boolean transparent) {
-        if (blocksToRender.isEmpty()) return;
-        Minecraft mc = Minecraft.getMinecraft();
-        final int savedAo = mc.gameSettings.ambientOcclusion;
-        mc.gameSettings.ambientOcclusion = 0;
-        tessellator.startDrawingQuads();
-        try {
-            if (transparent) {
-                tessellator.setColorRGBA_F(1f, 1f, 1f, 0.3f);
-                tessellator.disableColor();
-            }
-            tessellator.setBrightness(15 << 20 | 15 << 4);
-            for (int i = 0; i < 2; i++) {
-                for (long pos : blocksToRender) {
-                    int x = CoordinatePacker.unpackX(pos);
-                    int y = CoordinatePacker.unpackY(pos);
-                    int z = CoordinatePacker.unpackZ(pos);
-                    Block block = world.getBlock(x, y, z);
-                    if (block.equals(Blocks.air) || !block.canRenderInPass(i)) continue;
-
-                    bufferBuilder.blockAccess = world;
-                    bufferBuilder.setRenderBounds(0, 0, 0, 1, 1, 1);
-                    bufferBuilder.renderAllFaces = renderAllFaces;
-                    bufferBuilder.renderBlockByRenderType(block, x, y, z);
-                }
-            }
-            if (onRender != null) {
-                onRender.accept(this);
-            }
-        } finally {
-            mc.gameSettings.ambientOcclusion = savedAo;
-            tessellator.draw();
-            tessellator.setTranslation(0, 0, 0);
-        }
-    }
-
     public static void setDefaultPassRenderState(int pass) {
         glColor4f(1, 1, 1, 1);
         if (pass == 0) { // SOLID
@@ -378,17 +355,13 @@ public abstract class WorldSceneRenderer {
         }
     }
 
-    public boolean isInsideRect(int x, int y) {
-        return x > rect.x() && x < rect.x() + rect.z() && y > rect.y() && y < rect.y() + rect.w();
-    }
-
     public MovingObjectPosition rayTrace(Vector3f lookVec) {
         Vec3 startPos = Vec3.createVectorHelper(this.eyePos.x, this.eyePos.y, this.eyePos.z);
-        lookVec.mul(100); // range: 100 Blocks
+        lookVec.scale(100); // range: 100 Blocks
         Vec3 endPos = Vec3.createVectorHelper(
                 (lookVec.x + startPos.xCoord),
                 (lookVec.y + startPos.yCoord),
                 (lookVec.z + startPos.zCoord));
-        return this.world.rayTraceBlocksWithTargetMap(startPos, endPos, world.blockMap.keySet());
+        return this.world.rayTraceBlocksWithTargetMap(startPos, endPos, renderedBlocks);
     }
 }

@@ -2,58 +2,35 @@ package blockrenderer6343.client.world;
 
 import net.minecraft.block.Block;
 import net.minecraft.init.Blocks;
-import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.MathHelper;
 import net.minecraft.util.MovingObjectPosition;
 import net.minecraft.util.Vec3;
+import net.minecraft.world.chunk.Chunk;
+import net.minecraftforge.common.util.BlockSnapshot;
 
-import org.joml.Vector3f;
+import org.lwjgl.util.vector.Vector3f;
 
 import com.gtnewhorizon.gtnhlib.util.CoordinatePacker;
 
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
-import it.unimi.dsi.fastutil.longs.Long2IntMap;
-import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 
 public class TrackedDummyWorld extends DummyWorld {
 
-    public final Long2ObjectMap<Block> blockMap = new Long2ObjectOpenHashMap<>();
-    public final Long2ObjectMap<TileEntity> tileMap = new Long2ObjectOpenHashMap<>();
-    public final Long2IntMap blockMetaMap = new Long2IntOpenHashMap();
+    public final LongSet placedBlocks = new LongOpenHashSet();
 
     private final Vector3f minPos = new Vector3f(Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE);
     private final Vector3f maxPos = new Vector3f(Integer.MIN_VALUE, Integer.MIN_VALUE, Integer.MIN_VALUE);
-    private final Vector3f size = new Vector3f();
-    private boolean hasChanged;
-
-    private int visibleYLevel = -1;
 
     @Override
     public boolean setBlock(int x, int y, int z, Block block, int meta, int flags) {
-        long pos = CoordinatePacker.pack(x, y, z);
         if (block == Blocks.air) {
-            blockMap.remove(pos);
-            blockMetaMap.remove(pos);
-            if (block.hasTileEntity(meta)) {
-                removeTileEntity(x, y, z);
-            }
+            placedBlocks.remove(CoordinatePacker.pack(x, y, z));
         } else {
-            blockMap.put(pos, block);
-            blockMetaMap.put(pos, meta);
-            if (block.hasTileEntity(meta)) {
-                TileEntity tile = block.createTileEntity(this, meta);
-                if (tile != null) {
-                    setTileEntity(x, y, z, tile);
-                }
-            }
-            block.onBlockAdded(this, x, y, z);
+            placedBlocks.add(CoordinatePacker.pack(x, y, z));
         }
-
-        hasChanged = true;
         minPos.x = Math.min(minPos.x, x);
         minPos.y = Math.min(minPos.y, y);
         minPos.z = Math.min(minPos.z, z);
@@ -61,62 +38,53 @@ public class TrackedDummyWorld extends DummyWorld {
         maxPos.y = Math.max(maxPos.y, y);
         maxPos.z = Math.max(maxPos.z, z);
 
-        return y >= 0 && y < 256;
+        // copy base method to avoid fastcraft ASM
+        if (x >= -30000000 && z >= -30000000 && x < 30000000 && z < 30000000) {
+            if (y < 0) {
+                return false;
+            } else if (y >= 256) {
+                return false;
+            } else {
+                Chunk chunk = this.getChunkFromChunkCoords(x >> 4, z >> 4);
+                Block block1 = null;
+                BlockSnapshot blockSnapshot = null;
+
+                if ((flags & 1) != 0) {
+                    block1 = chunk.getBlock(x & 15, y, z & 15);
+                }
+
+                if (this.captureBlockSnapshots && !this.isRemote) {
+                    blockSnapshot = BlockSnapshot.getBlockSnapshot(this, x, y, z, flags);
+                    this.capturedBlockSnapshots.add(blockSnapshot);
+                }
+
+                boolean flag = chunk.func_150807_a(x & 15, y, z & 15, block, meta);
+
+                if (!flag && blockSnapshot != null) {
+                    this.capturedBlockSnapshots.remove(blockSnapshot);
+                    blockSnapshot = null;
+                }
+
+                this.theProfiler.startSection("checkLight");
+                this.func_147451_t(x, y, z);
+                this.theProfiler.endSection();
+
+                if (flag && blockSnapshot == null) // Don't notify clients or update physics while capturing blockstates
+                {
+                    // Modularize client and physic updates
+                    this.markAndNotifyBlock(x, y, z, chunk, block1, block, flags);
+                }
+
+                return flag;
+            }
+        } else {
+            return false;
+        }
     }
 
     @Override
     public Block getBlock(int x, int y, int z) {
-        Block block = blockMap.get(CoordinatePacker.pack(x, y, z));
-        return block == null ? Blocks.air : block;
-    }
-
-    @Override
-    public int getBlockMetadata(int x, int y, int z) {
-        return blockMetaMap.get(CoordinatePacker.pack(x, y, z));
-    }
-
-    @Override
-    public boolean setBlockMetadataWithNotify(int x, int y, int z, int meta, int flag) {
-        long pos = CoordinatePacker.pack(x, y, z);
-        if (!blockMap.containsKey(pos)) return false;
-        blockMetaMap.put(pos, meta);
-
-        TileEntity tile = tileMap.get(pos);
-        if (tile != null) {
-            tile.updateContainingBlockInfo();
-            tile.blockMetadata = meta;
-        }
-
-        return true;
-    }
-
-    @Override
-    public void setTileEntity(int x, int y, int z, TileEntity tile) {
-        tile.setWorldObj(this);
-        tile.xCoord = x;
-        tile.yCoord = y;
-        tile.zCoord = z;
-        tile.validate();
-        tileMap.put(CoordinatePacker.pack(x, y, z), tile);
-    }
-
-    @Override
-    public void removeTileEntity(int x, int y, int z) {
-        tileMap.remove(CoordinatePacker.pack(x, y, z)).invalidate();
-    }
-
-    @Override
-    public TileEntity getTileEntity(int x, int y, int z) {
-        return tileMap.get(CoordinatePacker.pack(x, y, z));
-    }
-
-    @Override
-    public void updateEntitiesForNEI() {
-        for (TileEntity tile : tileMap.values()) {
-            if (tile.canUpdate()) {
-                tile.updateEntity();
-            }
-        }
+        return super.getBlock(x, y, z);
     }
 
     /**
@@ -129,7 +97,11 @@ public class TrackedDummyWorld extends DummyWorld {
     }
 
     public Vector3f getSize() {
-        return size.set(maxPos.x - minPos.x + 1, maxPos.y - minPos.y + 1, maxPos.z - minPos.z + 1);
+        Vector3f result = new Vector3f();
+        result.x = maxPos.x - minPos.x + 1;
+        result.y = maxPos.y - minPos.y + 1;
+        result.z = maxPos.z - minPos.z + 1;
+        return result;
     }
 
     public Vector3f getMinPos() {
@@ -138,10 +110,6 @@ public class TrackedDummyWorld extends DummyWorld {
 
     public Vector3f getMaxPos() {
         return maxPos;
-    }
-
-    public void setVisibleYLevel(int visibleYLevel) {
-        this.visibleYLevel = visibleYLevel;
     }
 
     public MovingObjectPosition rayTraceBlocksWithTargetMap(Vec3 start, Vec3 end, LongSet targetedBlocks) {
@@ -161,16 +129,12 @@ public class TrackedDummyWorld extends DummyWorld {
                 Block block = this.getBlock(l, i1, j1);
                 int k1 = this.getBlockMetadata(l, i1, j1);
 
-                if (!ignoreBlockWithoutBoundingBox || block.getCollisionBoundingBoxFromPool(this, l, i1, j1) != null) {
-                    if (block.canCollideCheck(k1, stopOnLiquid)) {
-                        if (visibleYLevel == -1 || visibleYLevel == i1) {
-                            MovingObjectPosition movingobjectposition = block
-                                    .collisionRayTrace(this, l, i1, j1, start, end);
+                if ((!ignoreBlockWithoutBoundingBox || block.getCollisionBoundingBoxFromPool(this, l, i1, j1) != null)
+                        && block.canCollideCheck(k1, stopOnLiquid)) {
+                    MovingObjectPosition movingobjectposition = block.collisionRayTrace(this, l, i1, j1, start, end);
 
-                            if (movingobjectposition != null && isBlockTargeted(movingobjectposition, targetedBlocks)) {
-                                return movingobjectposition;
-                            }
-                        }
+                    if (movingobjectposition != null && isBlockTargeted(movingobjectposition, targetedBlocks)) {
+                        return movingobjectposition;
                     }
                 }
 
@@ -299,14 +263,12 @@ public class TrackedDummyWorld extends DummyWorld {
                     if (!ignoreBlockWithoutBoundingBox
                             || block1.getCollisionBoundingBoxFromPool(this, l, i1, j1) != null) {
                         if (block1.canCollideCheck(l1, stopOnLiquid)) {
-                            if (visibleYLevel == -1 || visibleYLevel == i1) {
-                                MovingObjectPosition movingobjectposition1 = block1
-                                        .collisionRayTrace(this, l, i1, j1, start, end);
+                            MovingObjectPosition movingobjectposition1 = block1
+                                    .collisionRayTrace(this, l, i1, j1, start, end);
 
-                                if (movingobjectposition1 != null
-                                        && isBlockTargeted(movingobjectposition1, targetedBlocks)) {
-                                    return movingobjectposition1;
-                                }
+                            if (movingobjectposition1 != null
+                                    && isBlockTargeted(movingobjectposition1, targetedBlocks)) {
+                                return movingobjectposition1;
                             }
                         } else {
                             movingobjectposition2 = new MovingObjectPosition(l, i1, j1, b0, start, false);
@@ -325,11 +287,5 @@ public class TrackedDummyWorld extends DummyWorld {
 
     private boolean isBlockTargeted(MovingObjectPosition result, LongSet targetedBlocks) {
         return targetedBlocks.contains(CoordinatePacker.pack(result.blockX, result.blockY, result.blockZ));
-    }
-
-    public boolean hasChanged() {
-        boolean changed = hasChanged;
-        hasChanged = false;
-        return changed;
     }
 }

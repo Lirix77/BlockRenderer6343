@@ -11,13 +11,14 @@ import org.jetbrains.annotations.NotNull;
 import com.gtnewhorizon.structurelib.structure.IItemSource;
 
 import codechicken.nei.ItemList;
-import it.unimi.dsi.fastutil.objects.Reference2ReferenceLinkedOpenHashMap;
 
 public class CreativeItemSource implements IItemSource {
 
-    public static final CreativeItemSource instance = new CreativeItemSource();
+    public static final CreativeItemSource instance;
 
-    private Reference2ReferenceLinkedOpenHashMap<ItemStack, ItemStack> itemList;
+    static {
+        instance = new CreativeItemSource();
+    }
 
     @NotNull
     @Override
@@ -25,22 +26,9 @@ public class CreativeItemSource implements IItemSource {
         Map<ItemStack, Integer> store = new HashMap<>();
         if (!ItemList.loadFinished) return store;
 
-        if (itemList == null) {
-            itemList = new Reference2ReferenceLinkedOpenHashMap<>();
-
-            for (ItemStack stack : ItemList.items) {
-                itemList.put(stack, stack);
-            }
-        }
-
-        for (var p : itemList.reference2ReferenceEntrySet()) {
-            ItemStack itemStack = p.getValue();
-
+        for (ItemStack itemStack : ItemList.items) {
             if (predicate.test(itemStack)) {
                 store.put(itemStack, Integer.MAX_VALUE);
-
-                itemList.putAndMoveToFirst(itemStack, itemStack);
-
                 return store;
             }
         }

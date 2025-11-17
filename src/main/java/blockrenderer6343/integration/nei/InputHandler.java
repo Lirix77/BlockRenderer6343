@@ -7,13 +7,23 @@ import net.minecraft.item.ItemStack;
 
 import codechicken.nei.guihook.IContainerInputHandler;
 import codechicken.nei.guihook.IContainerTooltipHandler;
+import codechicken.nei.recipe.GuiCraftingRecipe;
+import codechicken.nei.recipe.GuiRecipe;
+import codechicken.nei.recipe.GuiUsageRecipe;
 
 public class InputHandler implements IContainerInputHandler, IContainerTooltipHandler {
 
     private MultiblockHandler activeHandler;
 
     public boolean canHandle(GuiContainer gui) {
-        return (activeHandler = MultiblockHandler.getHandlerFromGui(gui)) != null;
+        if ((gui instanceof GuiUsageRecipe || gui instanceof GuiCraftingRecipe)) {
+            GuiRecipe<?> recipe = (GuiRecipe<?>) gui;
+            if (recipe.getHandler() instanceof MultiblockHandler mbHandler) {
+                activeHandler = mbHandler;
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -30,9 +40,9 @@ public class InputHandler implements IContainerInputHandler, IContainerTooltipHa
     }
 
     @Override
-    public List<String> handleTooltip(GuiContainer gui, int mouseX, int mouseY, List<String> currenttip) {
-        if (canHandle(gui)) {
-            currenttip.addAll(activeHandler.getGuiHandler().getTooltip());
+    public List<String> handleTooltip(GuiContainer gui, int mousex, int mousey, List<String> currenttip) {
+        if (canHandle(gui) && activeHandler.getGuiHandler().handleTooltip() != null) {
+            currenttip.addAll(activeHandler.getGuiHandler().handleTooltip());
         }
         return currenttip;
     }
@@ -60,11 +70,7 @@ public class InputHandler implements IContainerInputHandler, IContainerTooltipHa
     public void onMouseClicked(GuiContainer gui, int mousex, int mousey, int button) {}
 
     @Override
-    public void onMouseUp(GuiContainer gui, int mousex, int mousey, int button) {
-        if (canHandle(gui) && button == 0) {
-            activeHandler.getGuiHandler().onMouseReleased();
-        }
-    }
+    public void onMouseUp(GuiContainer gui, int mousex, int mousey, int button) {}
 
     @Override
     public boolean mouseScrolled(GuiContainer gui, int mousex, int mousey, int scrolled) {
@@ -78,9 +84,5 @@ public class InputHandler implements IContainerInputHandler, IContainerTooltipHa
     public void onMouseScrolled(GuiContainer gui, int mousex, int mousey, int scrolled) {}
 
     @Override
-    public void onMouseDragged(GuiContainer gui, int amousex, int amousey, int button, long heldTime) {
-        if (canHandle(gui) && button == 0) {
-            activeHandler.getGuiHandler().onMouseDragged();
-        }
-    }
+    public void onMouseDragged(GuiContainer gui, int amousex, int amousey, int button, long heldTime) {}
 }
